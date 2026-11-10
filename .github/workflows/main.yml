@@ -1,0 +1,56 @@
+
+name: Build MobileGlues MC26.3 ARM64
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'build.yml'
+      - 'build.sh'
+      - 'patches/**'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout patch repository
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            git cmake ninja-build build-essential
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android NDK 27
+        run: |
+          sdkmanager "ndk;27.0.12077973"
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/27.0.12077973" >> $GITHUB_ENV
+
+      - name: Build MobileGlues
+        run: |
+          chmod +x build.sh
+          ./build.sh
+
+      - name: Verify binary
+        run: |
+          test -f build-arm64-v8a/libmobileglues.so
+          file build-arm64-v8a/libmobileglues.so
+          ls -lh build-arm64-v8a/libmobileglues.so
+
+      - name: Upload ARM64 binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: MobileGlues-MC26.3-ARM64
+          path: build-arm64-v8a/libmobileglues.so
+          if-no-files-found: error
+          retention-days: 14
+          
