@@ -1,56 +1,134 @@
 
-name: Build MobileGlues MC26.3 ARM64
+name: Build MobileGlues MC 26.3 ARM64
 
 on:
   workflow_dispatch:
   push:
+    branches:
+      - main
     paths:
-      - 'build.yml'
-      - 'build.sh'
-      - 'patches/**'
+      - ".github/workflows/build.yml"
+      - "patches/**"
 
 permissions:
   contents: read
 
 jobs:
   build:
+    name: Build ARM64 Binary
     runs-on: ubuntu-24.04
     timeout-minutes: 90
+
+    env:
+      ANDROID_NDK_VERSION: "27.0.12077973"
+      MG_REF: "97558a69157b033b890958b1e49258c5b51a80c6"
+      ABI: "arm64-v8a"
 
     steps:
       - name: Checkout patch repository
         uses: actions/checkout@v4
+        with:
+          submodules: false
 
       - name: Install build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            git cmake ninja-build build-essential
+            git \
+            cmake \
+            ninja-build \
+            unzip \
+            file
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          accept-android-sdk-licenses: true
+          log-accepted-android-sdk-licenses: true
 
       - name: Install Android NDK 27
         run: |
-          sdkmanager "ndk;27.0.12077973"
-          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/27.0.12077973" >> $GITHUB_ENV
+          sdkmanager --install \
+            "platform-tools" \
+            "ndk;${ANDROID_NDK_VERSION}"
+
+          echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/${ANDROID_NDK_VERSION}" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=${ANDROID_HOME}/ndk/${ANDROID_NDK_VERSION}" >> "$GITHUB_ENV"
+
+          test -f "${ANDROID_HOME}/ndk/${ANDROID_NDK_VERSION}/build/cmake/android.toolchain.cmake"
+
+      - name: Checkout MobileGlues source
+        run: |
+          git clone \
+            https://github.com/MobileGL-Dev/MobileGlues.git \
+            MobileGlues
+
+          cd MobileGlues
+
+          git checkout "${MG_REF}"
+
+          git submodule update --init --recursive
+
+      - name: Apply MC 26.3 patches
+        run: |
+          test -f patches/mobileglues-mc26.3.patch
+
+          cd MobileGlues
+
+          git apply --check ../patches/mobileglues-mc26.3.patch
+          git apply ../patches/mobileglues-mc26.3.patch
+
+      - name: Configure Android ARM64
+        run: |
+          cmake \
+            -S MobileGlues/MobileGlues-cpp \
+            -B build \
+            -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="${ANDROID_NDK_HOME}/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-21 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DANDROID_STL=c++_static
 
       - name: Build MobileGlues
         run: |
-          chmod +x build.sh
-          ./build.sh
+          cmake --build build \
+            --target mobileglues \
+            --parallel 2
 
       - name: Verify binary
         run: |
-          test -f build-arm64-v8a/libmobileglues.so
-          file build-arm64-v8a/libmobileglues.so
-          ls -lh build-arm64-v8a/libmobileglues.so
+          set -e
+
+          BINARY="build/libmobileglues.so"
+
+          test -s "$BINARY"
+
+          file "$BINARY"
+
+          "${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" \
+            -h "$BINARY"
+
+          "${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" \
+            --strip-unneeded "$BINARY"
+
+          test -s "$BINARY"
+
+          echo "Binary verification successful"
+
+      - name: Prepare ARM64 artifact
+        run: |
+          mkdir -p output/lib/arm64-v8a
+
+          cp build/libmobileglues.so \
+            output/lib/arm64-v8a/libmobileglues.so
+
+          ls -lh output/lib/arm64-v8a/
 
       - name: Upload ARM64 binary
         uses: actions/upload-artifact@v4
         with:
           name: MobileGlues-MC26.3-ARM64
-          path: build-arm64-v8a/libmobileglues.so
+          path: output/lib/arm64-v8a/libmobileglues.so
           if-no-files-found: error
           retention-days: 14
-          
